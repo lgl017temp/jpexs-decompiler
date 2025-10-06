@@ -42,7 +42,19 @@ import com.jpexs.decompiler.flash.abc.avm2.parser.script.ActionScript3Parser;
 import com.jpexs.decompiler.flash.abc.types.Float4;
 import com.jpexs.decompiler.flash.abc.types.MethodBody;
 import com.jpexs.decompiler.flash.abc.types.traits.Trait;
+import com.jpexs.decompiler.flash.abc.types.traits.TraitClass;
+import com.jpexs.decompiler.flash.abc.types.traits.TraitMethodGetterSetter;
 import com.jpexs.decompiler.flash.abc.usages.simple.ABCCleaner;
+import com.jpexs.decompiler.flash.abc.types.ClassInfo;
+import com.jpexs.decompiler.flash.abc.types.InstanceInfo;
+import com.jpexs.decompiler.flash.abc.types.MetadataInfo;
+import com.jpexs.decompiler.flash.abc.types.MethodBody;
+import com.jpexs.decompiler.flash.abc.types.MethodInfo;
+import com.jpexs.decompiler.flash.abc.types.Multiname;
+import com.jpexs.decompiler.flash.abc.types.Namespace;
+import com.jpexs.decompiler.flash.abc.types.NamespaceSet;
+import com.jpexs.decompiler.flash.abc.types.ScriptInfo;
+import com.jpexs.decompiler.flash.abc.types.traits.Trait;
 import com.jpexs.decompiler.flash.action.parser.ActionParseException;
 import com.jpexs.decompiler.flash.action.parser.pcode.ASMParser;
 import com.jpexs.decompiler.flash.action.parser.script.ActionScript2Parser;
@@ -141,6 +153,7 @@ import com.jpexs.decompiler.flash.tags.ABCContainerTag;
 import com.jpexs.decompiler.flash.tags.DefineBinaryDataTag;
 import com.jpexs.decompiler.flash.tags.DefineBitsJPEG2Tag;
 import com.jpexs.decompiler.flash.tags.DefineBitsJPEG3Tag;
+import com.jpexs.decompiler.flash.tags.DefineFont3Tag;
 import com.jpexs.decompiler.flash.tags.DefineFont4Tag;
 import com.jpexs.decompiler.flash.tags.DefineSpriteTag;
 import com.jpexs.decompiler.flash.tags.DefineVideoStreamTag;
@@ -197,7 +210,6 @@ import com.sun.jna.Platform;
 import gnu.jpdf.PDFGraphics;
 import gnu.jpdf.PDFJob;
 import java.awt.Font;
-import java.awt.FontFormatException;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.Point;
@@ -235,7 +247,6 @@ import java.util.GregorianCalendar;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -678,6 +689,9 @@ public class CommandLineArgumentParser {
             parseProxy(args);
         } else if (command.equals("export")) {
             parseExport(selectionClasses, selection, selectionIds, args, handler, traceLevel, format, zoom, charset, exportEmbed, resampleWav, transparentBackground, urlResolver);
+            System.exit(0);
+        } else if (command.equals("dumpabc")) {
+			parseDumpABC(args, charset);
             System.exit(0);
         } else if (command.equals("compress")) {
             parseCompress(args);
@@ -2356,6 +2370,84 @@ public class CommandLineArgumentParser {
         System.exit(exportOK ? 0 : 1);
     }
 
+	private static void parseDumpABC(Stack<String> args, String charset) {
+		if (args.size() < 3) {
+            badArguments("dumpabc");
+        }
+
+		File inFile = new File(args.pop());
+		File outFile = new File(args.pop());
+		String classpath = args.pop();
+
+		// System.out.println(classpath);
+
+		try {
+			try (StdInAwareFileInputStream is = new StdInAwareFileInputStream(inFile)) {
+				SWF swf = new SWF(is, Configuration.parallelSpeedUp.get(), charset);
+
+				List<ScriptPack> packs = swf.getAS3Packs();
+
+				for (ScriptPack entry : packs) {
+					String path = entry.getClassPath().toString();
+					if (path.equals(classpath)) {
+						ScriptPack pack = entry;
+						ABC abc = pack.abc;
+
+						// abc.dump(System.out);
+
+						List<DottedChain> fullyQualifiedNames = new ArrayList<>();
+						List<InstanceInfo> instanceInfos = abc.instance_info;
+						List<ClassInfo> classInfos = abc.class_info;
+						List<ScriptInfo> scriptInfos = abc.script_info;
+						for (ScriptInfo scriptInfo : scriptInfos) {
+							for (Trait trait : scriptInfo.traits.traits) {
+								if (trait instanceof TraitClass) {
+									int class_info_idx = ((TraitClass)trait).class_info;
+									ClassInfo classInfo = abc.class_info.get(class_info_idx);
+									InstanceInfo instanceInfo = abc.instance_info.get(class_info_idx);
+
+									int cinit_index = classInfo.cinit_index;
+									MethodInfo initMethodInfo = abc.method_info.get(cinit_index);
+									MethodBody initBody = abc.findBody(initMethodInfo);
+									Multiname classMultiname = abc.constants.getMultiname(trait.name_index);
+
+									String namespace = abc.constants.getNamespace(classMultiname.namespace_index).getName(abc.constants).toRawString();
+									String className = abc.constants.getString(classMultiname.name_index);
+									
+									System.out.println((namespace.equals("") ? "" : namespace+":")+className+":"+"cinit"+"\t"+abc.bodies.indexOf(initBody));
+									// System.out.print(abc.constants.getMultiname(trait.name_index).toString(abc.constants, fullyQualifiedNames));
+									// System.out.print("\t");
+									// System.out.print(abc.bodies.indexOf(initBody));
+									// System.out.print("\n");
+
+									for (Trait methodTrait : instanceInfo.instance_traits.traits) {
+										if (methodTrait instanceof TraitMethodGetterSetter) {
+											int method_info_idx = ((TraitMethodGetterSetter)methodTrait).method_info;
+											MethodInfo methodInfo = abc.method_info.get(method_info_idx);
+											MethodBody body = abc.findBody(methodInfo);
+											Multiname multiname = abc.constants.getMultiname(methodTrait.name_index);
+
+											String methodName = abc.constants.getString(multiname.name_index);
+
+											System.out.println(namespace+":"+className+":"+methodName+"\t"+abc.bodies.indexOf(body));
+											// System.out.print(abc.constants.getMultiname(methodTrait.name_index).toString(abc.constants, fullyQualifiedNames));
+											// System.out.print("\t");
+											// System.out.print(abc.bodies.indexOf(body));
+											// System.out.print("\n");
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		} catch (IOException | InterruptedException e) {
+			System.err.println("I/O error during reading");
+			System.exit(2);
+		}
+	}
+
     private static void exportFla(boolean compressed, String outDir, File inFile, SWF swf, boolean multipleExportTypes, Map<String, String> formats, AbortRetryIgnoreHandler handler) throws IOException, InterruptedException {
         String exportFormat = compressed ? "fla" : "xfl";
         String format = formats.get(exportFormat);
@@ -3005,7 +3097,7 @@ public class CommandLineArgumentParser {
             try (StdInAwareFileInputStream is = new StdInAwareFileInputStream(inFile)) {
                 SWF swf = new SWF(is, Configuration.parallelSpeedUp.get(), charset);
                 while (true) {
-                    String objectToReplace = args.pop();
+                    String objectToReplace = args.pop();                    
 
                     if (objectToReplace.matches("\\d+")) {
                         // replace character tag
@@ -3105,43 +3197,85 @@ public class CommandLineArgumentParser {
                                 }
                             }).importText(textTag, new String(data, Utf8Helper.charset));
                         } else if (characterTag instanceof FontTag) {
-                            FontTag fontTag = (FontTag) characterTag;
-                            Set<Character> selChars = new HashSet<>();
-                            Font font;
-                            try {
-                                font = Font.createFont(Font.TRUETYPE_FONT, new File(repFile));
-                                List<Character> required = Arrays.asList((char) 0x01, (char) 0x00, (char) 0x0D, (char) 0x20);
-                                for (char c = 0; c < Character.MAX_VALUE; c++) {
-                                    if (required.contains(c)) {
-                                        continue;
-                                    }
-                                    if (!font.canDisplay(c)) {
-                                        continue;
-                                    }
-                                    if (Utf8Helper.charToCodePoint(c, fontTag.getCodesCharset()) == -1) {
-                                        continue;
-                                    }                                    
-                                    selChars.add(c);                                                                        
-                                }
-                            } catch (FontFormatException | IOException e) {
-                                System.err.println("replace font tag fail: " + e.getMessage());
-                                System.exit(1);
-                                return;
-                            }
+							FontTag fontTag = (FontTag) characterTag;
+							fontTag.reload();
+							Set<Integer> selChars = new HashSet<>();
+							Font font = null;
+							try {
+								font = Font.createFont(Font.TRUETYPE_FONT, new File(repFile));
+								int[] required = new int[]{0x0001, 0x0000, 0x000D, 0x0020};
+								loopi:
+								for (char i = 0; i < Character.MAX_VALUE; i++) {
+									for (int r : required) {
+										if (r == i) {
+											continue loopi;
+										}
+									}
+									if (font.canDisplay((int) i)) {
+										selChars.add((int) i);
+									}
+								}
+							} catch (Exception e) {
+								System.err.println("replace font tag fail: " + e.getMessage());
+							}
 
-                            if (font.getSize() != 1024) {
-                                font = font.deriveFont(fontTag.getFontStyle(), 1024);
-                            }
-                                                                
-                            for (char c : selChars) {
-                                if (!fontTag.addCharacter(c, font)) {
-                                    break;
-                                }
-                            }
+							String oldchars = fontTag.getCharacters();
+							for (int ic : selChars) {
+								char c = (char) ic;
+								if (oldchars.indexOf((int) c) == -1) {
+									if (font.getSize() != 1024) { //Do not resize if not required so we can have single instance of custom fonts
+										font = font.deriveFont(fontTag.getFontStyle(), 1024);
+									}
+									if (Utf8Helper.charToCodePoint(c, fontTag.getCodesCharset()) == -1) {
+										System.err.println("error.charset.nocharacter:" + c);
+										return;
+									}
+									if (!font.canDisplay(c)) {
+										System.err.println("error.charset.nocharacter:" + c);
+										return;
+									}
+								}
+							}
+							boolean yestoall = false;
+							boolean notoall = false;
+							boolean replaced = false;
+							int numAdded = 0;
+							for (int ic : selChars) {
+								char c = (char) ic;
+								if (oldchars.indexOf((int) c) > -1) {
+									int opt = -1;
+									yestoall = true;
+									// notoall = true;
+
+									if (yestoall) {
+										opt = 0; // yes
+									} else if (notoall) {
+										opt = 1; // no
+									}
+
+									if (opt == 1) {
+										continue;
+									}
+
+									replaced = true;
+								}
+
+								if (!fontTag.addCharacter(c, font)) {
+									break;
+								}
+								numAdded++;
+								oldchars += c;
+							}
                         } else if (characterTag instanceof DefineFont4Tag) {
-                            DefineFont4Tag font4 = (DefineFont4Tag) characterTag;
-                            font4.fontData = new ByteArrayRange(data);
-                            font4.setModified(true);
+							try {
+								Field field = DefineFont4Tag.class.getDeclaredField("fontData");
+								Object oldValue = ReflectionTools.getValue(characterTag, field, 6);
+								Object newValue = new ByteArrayRange(data);
+								ReflectionTools.setValue(characterTag, field, 6, newValue);
+								characterTag.setModified(true);
+							} catch (Exception e) {
+								System.err.println("replace font tag fail: " + e.getMessage());
+							}
                         } else if (characterTag instanceof SoundTag) {
                             SoundTag st = (SoundTag) characterTag;
                             Integer startFrame = null;
@@ -3230,6 +3364,7 @@ public class CommandLineArgumentParser {
                                             badArguments("replace");
                                         }
 
+										
                                         int bodyIndex = Integer.parseInt(args.pop());
                                         ABC abc = pack.abc;
                                         List<Trait> resultTraits = abc.getMethodIndexing().findMethodTraits(pack, bodyIndex);
@@ -4397,9 +4532,9 @@ public class CommandLineArgumentParser {
         if (dcs != null) {
             if (dcs.contains(".")) {
                 DottedChain dc = DottedChain.parseWithSuffix(dcs);
-                pw.println("documentClass=" + dc.toPrintableString(new LinkedHashSet<>(), swf, true));
+                pw.println("documentClass=" + dc.toPrintableString(true));
             } else {
-                pw.println("documentClass=" + IdentifiersDeobfuscation.printIdentifier(swf, new LinkedHashSet<>(), true, dcs));
+                pw.println("documentClass=" + IdentifiersDeobfuscation.printIdentifier(true, dcs));
             }
         } else {
             pw.println("documentClass=");
